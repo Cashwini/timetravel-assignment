@@ -1,0 +1,14 @@
+ashwini@mac timetravel-assignment % curl -X POST http://localhost:8000/api/v1/records/2 -H "Content-Type: application/json" -d '{"username":"xyz", "status": "ok"}'
+{"id":2,"data":{"status":"ok","username":"xyz"}}
+ashwini@mac timetravel-assignment % curl -X POST http://localhost:8000/api/v1/records/1 -H "Content-Type: application/json" -d '{"username":"abc", "status": "ok"}' 
+{"id":1,"data":{"status":"ok","username":"abc"}}
+ashwini@mac timetravel-assignment % curl -X GET http://localhost:8000/api/v1/records/2   
+{"id":2,"data":{"status":"ok","username":"xyz"}}
+ashwini@mac timetravel-assignment % curl -X POST http://localhost:8000/api/v1/records/1 -H "Content-Type: application/json" -d '{"username":null, "status": "ok"}' 
+{"id":1,"data":{"status":"ok"}}
+ashwini@mac timetravel-assignment % curl -X GET http://localhost:8000/api/v1/records/1                                                                             
+{"id":1,"data":{"status":"ok"}}
+
+
+
+

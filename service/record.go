@@ -1,10 +1,14 @@
 package service
 
 import (
-	"context"
-	"errors"
+    "context"
+    "database/sql"
+    "errors"
+    "fmt"
+	"log"
 
-	"github.com/rainbowmga/timetravel/entity"
+    "github.com/rainbowmga/timetravel/entity"
+    _ "github.com/mattn/go-sqlite3"
 )
 
 var ErrRecordDoesNotExist = errors.New("record with that id does not exist")
@@ -29,55 +33,144 @@ type RecordService interface {
 	UpdateRecord(ctx context.Context, id int, updates map[string]*string) (entity.Record, error)
 }
 
-// InMemoryRecordService is an in-memory implementation of RecordService.
-type InMemoryRecordService struct {
-	data map[int]entity.Record
+// SQLite implementation of RecordService.
+type SQLiteRecordService struct {
+    db *sql.DB
 }
 
-func NewInMemoryRecordService() InMemoryRecordService {
-	return InMemoryRecordService{
-		data: map[int]entity.Record{},
-	}
+//New instance of SQLiteVersionedRecordService with a database connection.
+//It will create the records table if it does not exist.
+func NewSQLiteVersionedRecordService(dataSource string) (*SQLiteRecordService, error) {
+    db, err := sql.Open("sqlite3", dataSource)
+    if err != nil {
+        return nil, err
+    }
+    query := `
+    DROP TABLE IF EXISTS records;
+    `
+    _, err = db.Exec(query)
+    if err != nil {
+        return nil, err
+    }
+    query = `
+	CREATE TABLE IF NOT EXISTS records (
+    	id     INTEGER NOT NULL,
+    	key    TEXT NOT NULL,
+    	value  TEXT,
+    	PRIMARY KEY (id, key)
+	);`
+    _, err = db.Exec(query)
+    if err != nil {
+        return nil, err
+    }
+    return &SQLiteRecordService{db: db}, nil
 }
 
-func (s *InMemoryRecordService) GetRecord(ctx context.Context, id int) (entity.Record, error) {
-	record := s.data[id]
-	if record.ID == 0 {
-		return entity.Record{}, ErrRecordDoesNotExist
-	}
+func (s *SQLiteRecordService) GetRecord(ctx context.Context, id int) (entity.Record, error) {
+	log.Printf("Retrieving record with ID: %d", id)
+    query := `SELECT key, value FROM records WHERE id = ?`
+    rows, err := s.db.QueryContext(ctx, query, id)
+    if err != nil {
+        return entity.Record{}, err
+    }
+    defer rows.Close()
 
-	record = record.Copy() // copy is necessary so modifations to the record don't change the stored record
-	return record, nil
+    data := make(map[string]string)
+    for rows.Next() {
+        var k, v string
+        if err := rows.Scan(&k, &v); err != nil {
+            return entity.Record{}, err
+        }
+        data[k] = v
+    }
+
+    if len(data) == 0 {
+        return entity.Record{}, ErrRecordDoesNotExist
+    }
+    return entity.Record{ID: id, Data: data}, nil
 }
 
-func (s *InMemoryRecordService) CreateRecord(ctx context.Context, record entity.Record) error {
-	id := record.ID
+func (s *SQLiteRecordService) CreateRecord(ctx context.Context, rec entity.Record) error {
+	log.Printf("Creating record with ID: %d", rec.ID)
+	id := rec.ID
 	if id <= 0 {
 		return ErrRecordIDInvalid
 	}
+    tx, err := s.db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
 
-	existingRecord := s.data[id]
-	if existingRecord.ID != 0 {
-		return ErrRecordAlreadyExists
-	}
+	log.Printf("Inserting record with ID: %d", rec.ID)
+    // Insert all keys
+    for k, v := range rec.Data {
+        if _, err := tx.ExecContext(ctx,
+            `INSERT INTO records (id, key, value) VALUES (?, ?, ?)`,
+            rec.ID, k, v); err != nil {
+            return err
+        }
+    }
 
-	s.data[id] = record
-	return nil
+    return tx.Commit()
 }
 
-func (s *InMemoryRecordService) UpdateRecord(ctx context.Context, id int, updates map[string]*string) (entity.Record, error) {
-	entry := s.data[id]
-	if entry.ID == 0 {
+func (s *SQLiteRecordService) UpdateRecord(ctx context.Context, id int, updates map[string]*string) (entity.Record, error) {
+    log.Printf("Updating record with ID: %d", id)
+	if id <= 0 {
+		return entity.Record{}, ErrRecordIDInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+    if err != nil {
+        return entity.Record{}, err
+    }
+    defer tx.Rollback()
+
+	// Throw error if id does not exist
+    var exists bool
+    err = tx.QueryRowContext(ctx,
+        `SELECT EXISTS (SELECT 1 FROM records WHERE id = ?)`,
+        id).Scan(&exists)
+    if err != nil {
+        return entity.Record{}, err
+    }
+	if !exists {
 		return entity.Record{}, ErrRecordDoesNotExist
 	}
 
-	for key, value := range updates {
-		if value == nil { // deletion update
-			delete(entry.Data, key)
-		} else {
-			entry.Data[key] = *value
-		}
-	}
+    for k, v := range updates {
+        if v == nil {
+			// delete only if key exists
+            res, err := tx.ExecContext(ctx,
+                `DELETE FROM records WHERE id = ? AND key = ?`, id, k)
+            if err != nil {
+                return entity.Record{}, err
+            }
+            if rows, _ := res.RowsAffected(); rows == 0 {
+                return entity.Record{}, fmt.Errorf("key %q does not exist", k)
+            }
+        } else {
+			// Insert new or update existing key-value pair
+            if _, err := tx.ExecContext(ctx,
+                `INSERT INTO records (id, key, value) VALUES (?, ?, ?)
+                 ON CONFLICT(id, key) DO UPDATE SET value = excluded.value`,
+                id, k, *v); err != nil {
+                return entity.Record{}, fmt.Errorf("failed to upsert key %q: %w", k, err)
+            }
+			if err != nil {
+                return entity.Record{}, err
+			}	
+        }
+    }
 
-	return entry.Copy(), nil
+    if err := tx.Commit(); err != nil {
+        return entity.Record{}, err
+    }
+
+    // Retrieve the updated record to return
+    updatedRecord, err := s.GetRecord(ctx, id)
+    if err != nil {
+        return entity.Record{}, err
+    }
+    return updatedRecord, nil
 }
