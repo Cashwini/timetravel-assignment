@@ -21,19 +21,28 @@ func logError(err error) {
 func main() {
 	router := mux.NewRouter()
 
-	svc, err:= service.NewSQLiteVersionedRecordService("file:timetravel.db")
+	svc, err:= service.NewSQLiteRecordService("file:timetravel.db")
 	if err != nil {
         log.Fatal(err)
     }
 	api := api.NewAPI(svc)
 
-	log.Printf("creating")
+	log.Printf("creating v1 api routes")
 	apiRoute := router.PathPrefix("/api/v1").Subrouter()
 	apiRoute.Path("/health").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		err := json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		logError(err)
 	})
 	api.CreateRoutes(apiRoute)
+
+	log.Printf("creating v2 api routes")
+	apiV2Route := router.PathPrefix("/api/v2").Subrouter()
+	apiV2Route.Path("/health").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		logError(err)
+	})
+	api.CreateV2Routes(apiV2Route)
+
 
 	log.Printf("starting server")
 	address := "127.0.0.1:8000"

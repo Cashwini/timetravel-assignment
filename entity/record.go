@@ -1,5 +1,9 @@
 package entity
 
+import (
+	"time"
+)
+
 type Record struct {
 	ID   int               `json:"id"`
 	Data map[string]string `json:"data"`
@@ -17,4 +21,12 @@ func (d *Record) Copy() Record {
 		ID:   d.ID,
 		Data: newMap,
 	}
+}
+
+type V2Record struct {
+	ID   int               `json:"id"`
+	Version int            `json:"version"`
+	Effective_at time.Time `json:"effective_at"`
+	Created_at time.Time   `json:"created_at"`
+	Data map[string]string `json:"data"`
 }

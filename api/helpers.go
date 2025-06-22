@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
 	"net/http"
 )
 
@@ -34,4 +35,15 @@ func writeError(w http.ResponseWriter, message string, statusCode int) error {
 		map[string]string{"error": message},
 		statusCode,
 	)
+}
+
+// extractAPIVersion extracts the API version from the request path.
+func extractAPIVersion(path string) string {
+    parts := strings.Split(path, "/")
+    for i, part := range parts {
+        if part == "api" && i+1 < len(parts) {
+            return parts[i+1]
+        }
+    }
+    return ""
 }
